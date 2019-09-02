@@ -1,0 +1,43 @@
+平 O
+安 O
+科 O
+技 O
+在 O
+南 B-LOC
+山 I-LOC
+。 O
+
+我 O
+在 O
+深 B-LOC
+圳 I-LOC
+龙 B-LOC
+华 I-LOC
+区 I-LOC
+。 O
+
+平 B-ORG
+安 I-ORG
+科 I-ORG
+技 I-ORG
+在 O
+深 B-LOC
+圳 I-LOC
+。 O
+
+习 B-PER
+近 I-PER
+平 I-PER
+不 O
+在 O
+深 B-LOC
+圳 I-LOC
+龙 B-LOC
+华 I-LOC
+区 I-LOC
+， O
+在 O
+北 B-LOC
+京 I-LOC
+。 O
+

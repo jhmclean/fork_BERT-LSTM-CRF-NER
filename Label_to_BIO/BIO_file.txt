@@ -1,0 +1,18 @@
+平 O
+安 O
+科 O
+技 O
+在 O
+南 B-LOC
+山 I-LOC
+。 O
+
+平 O
+安 O
+科 O
+技 O
+在 O
+南 B-LOC
+山 I-LOC
+。 O
+
