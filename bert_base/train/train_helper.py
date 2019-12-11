@@ -15,12 +15,8 @@ __all__ = ['get_args_parser']
 def get_args_parser():
     from .bert_lstm_ner import __version__
     parser = argparse.ArgumentParser()
-    if os.name == 'nt':
-        bert_path = 'F:\chinese_L-12_H-768_A-12'
-        root_path = r'C:\workspace\python\BERT-BiLSTM-CRF-NER'
-    else:
-        bert_path = './chinese_L-12_H-768_A-12/'
-        root_path = './'
+    bert_path = './chinese_L-12_H-768_A-12/'
+    root_path = './'
 
     group1 = parser.add_argument_group('File Paths',
                                        'config the path, checkpoint and filename of a pretrained/fine-tuned BERT model')
@@ -78,7 +74,7 @@ def get_args_parser():
     group2.add_argument('-label_list', type=str, default=None,
                         help='User define labels， can be a file with one label one line or a string using \',\' split')
 
-    parser.add_argument('-verbose', action='store_true', default=False,
+    parser.add_argument('-verbose', action='store_true', default=True,
                         help='turn on tensorflow logging for debug')
     parser.add_argument('-ner', type=str, default='ner', help='which modle to train')
     parser.add_argument('-version', action='version', version='%(prog)s ' + __version__)

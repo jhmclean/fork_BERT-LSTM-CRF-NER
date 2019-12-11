@@ -90,6 +90,8 @@ def create_model(bert_config, is_training, input_ids, input_mask,
     )
     # 获取对应的embedding 输入数据[batch_size, seq_length, embedding_size]
     embedding = model.get_sequence_output()
+    # jzhang add
+    # embedding = model.get_all_encoder_layers()
     max_seq_length = embedding.shape[1].value
     # 算序列真实长度
     used = tf.sign(tf.abs(input_ids))
@@ -98,7 +100,9 @@ def create_model(bert_config, is_training, input_ids, input_mask,
     blstm_crf = BLSTM_CRF(embedded_chars=embedding, hidden_unit=lstm_size, cell_type=cell, num_layers=num_layers,
                           dropout_rate=dropout_rate, initializers=initializers, num_labels=num_labels,
                           seq_length=max_seq_length, labels=labels, lengths=lengths, is_training=is_training)
-    rst = blstm_crf.add_blstm_crf_layer(crf_only=True)
+    # jzhang: 设置参数crf_only=True，控制模型只使用CRF进行解码
+    #  如果设置crf_only=False，模型将使用BiLSTM-CRF作为Decoder
+    rst = blstm_crf.add_blstm_crf_layer(crf_only=False)
     return rst
 
 

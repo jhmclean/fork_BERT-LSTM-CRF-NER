@@ -257,7 +257,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length, tokeni
     assert len(label_ids) == max_seq_length
     # assert len(label_mask) == max_seq_length
 
-    # 打印部分样本数据信息
+    # 打印部分样本数据信息，以下是打印前5个
     if ex_index < 5:
         logger.info("*** Example ***")
         logger.info("guid: %s" % (example.guid))
@@ -344,7 +344,7 @@ def file_based_input_fn_builder(input_file, seq_length, is_training, drop_remain
             d = d.shuffle(buffer_size=300)
         d = d.apply(tf.data.experimental.map_and_batch(lambda record: _decode_record(record, name_to_features),
                                                        batch_size=batch_size,
-                                                       num_parallel_calls=8,  # 并行处理数据的CPU核心数量，不要大于你机器的核心数
+                                                       num_parallel_calls=6,  # 并行处理数据的CPU核心数量，不要大于你机器的核心数
                                                        drop_remainder=drop_remainder))
         d = d.prefetch(buffer_size=4)
         return d
@@ -381,7 +381,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
         # 使用参数构建模型,input_idx 就是输入的样本idx表示，label_ids 就是标签的idx表示
-        total_loss, logits, trans, pred_ids = create_model(
+        total_loss, logits, trans, pred_ids, best_score, lstm_output = create_model(
             bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
             num_labels, False, args.dropout_rate, args.lstm_size, args.cell, args.num_layers)
 
@@ -536,7 +536,7 @@ def train(args):
 
     run_config = tf.estimator.RunConfig(
         model_dir=args.output_dir,
-        save_summary_steps=500,
+        save_summary_steps=2,
         save_checkpoints_steps=500,
         session_config=session_config
     )
@@ -549,23 +549,24 @@ def train(args):
     if args.do_train and args.do_eval:
         # 加载训练数据
         train_examples = processor.get_train_examples(args.data_dir)
-        num_train_steps = int(
-            len(train_examples) *1.0 / args.batch_size * args.num_train_epochs)
+        # num_train_steps = int(
+        #     len(train_examples) *1.0 / args.batch_size * args.num_train_epochs)
+        num_train_steps = 3 #jzhang: 试一试
         if num_train_steps < 1:
             raise AttributeError('training data is so small...')
         num_warmup_steps = int(num_train_steps * args.warmup_proportion)
 
         logger.info("***** Running training *****")
-        logger.info("  Num examples = %d", len(train_examples))
-        logger.info("  Batch size = %d", args.batch_size)
-        logger.info("  Num steps = %d", num_train_steps)
+        logger.info("  Num examples = %d" % len(train_examples))
+        logger.info("  Batch size = %d" % args.batch_size)
+        logger.info("  Num steps = %d" % num_train_steps)
 
         eval_examples = processor.get_dev_examples(args.data_dir)
 
         # 打印验证集数据信息
         logger.info("***** Running evaluation *****")
-        logger.info("  Num examples = %d", len(eval_examples))
-        logger.info("  Batch size = %d", args.batch_size)
+        logger.info("  Num examples = %d" % len(eval_examples))
+        logger.info("  Batch size = %d" % args.batch_size)
 
     label_list = processor.get_labels()
     # 返回的model_dn 是一个函数，其定义了模型，训练，评测方法，并且使用钩子参数，加载了BERT模型的参数进行了自己模型的参数初始化过程
@@ -627,7 +628,8 @@ def train(args):
 
         train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn, max_steps=num_train_steps,
                                             hooks=[early_stopping_hook])
-        eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn)
+        # eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn)
+        eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn, steps=3) # jzhang: 试一试
         tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
 
     if args.do_predict:
@@ -646,8 +648,8 @@ def train(args):
                                                  predict_file, args.output_dir, mode="test")
 
         logger.info("***** Running prediction*****")
-        logger.info("  Num examples = %d", len(predict_examples))
-        logger.info("  Batch size = %d", args.batch_size)
+        logger.info("  Num examples = %d" % len(predict_examples))
+        logger.info("  Batch size = %d" % args.batch_size)
 
         predict_drop_remainder = False
         predict_input_fn = file_based_input_fn_builder(
@@ -660,7 +662,9 @@ def train(args):
         output_predict_file = os.path.join(args.output_dir, "label_test.txt")
 
         def result_to_pair(writer):
+            i = 0
             for predict_line, prediction in zip(predict_examples, result):
+                print('Predicting the {}-th line'.format(i))
                 idx = 0
                 line = ''
                 line_token = str(predict_line.text).split(' ')
@@ -688,6 +692,7 @@ def train(args):
                         break
                     idx += 1
                 writer.write(line + '\n')
+                i += 1
 
         with codecs.open(output_predict_file, 'w', encoding='utf-8') as writer:
             result_to_pair(writer)

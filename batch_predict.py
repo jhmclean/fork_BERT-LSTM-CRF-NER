@@ -6,6 +6,7 @@
 
 import tensorflow as tf
 import numpy as np
+import pandas as pd
 import codecs
 import pickle
 import os
@@ -16,7 +17,7 @@ from bert_base.bert import tokenization, modeling
 from bert_base.train.train_helper import get_args_parser
 args = get_args_parser()
 
-model_dir = './output'
+model_dir = './output_lstm_crf'
 bert_dir = './chinese_L-12_H-768_A-12'
 
 is_training=False
@@ -45,6 +46,7 @@ with codecs.open(os.path.join(model_dir, 'label_list.pkl'), 'rb') as rf:
     label_list = pickle.load(rf)
 num_labels = len(label_list) + 1
 
+
 graph = tf.get_default_graph()
 with graph.as_default():
     print("going to restore checkpoint")
@@ -53,9 +55,11 @@ with graph.as_default():
     input_mask_p = tf.placeholder(tf.int32, [batch_size, args.max_seq_length], name="input_mask")
 
     bert_config = modeling.BertConfig.from_json_file(os.path.join(bert_dir, 'bert_config.json'))
-    (total_loss, logits, trans, pred_ids) = create_model(
+
+    # jzhang: 注意，如果加载的模型用到了lstm，则一定要设置lstm_size与加载模型的lstm_size相等，不然会报错
+    (total_loss, logits, trans, pred_ids, best_score, lstm_output) = create_model(
         bert_config=bert_config, is_training=False, input_ids=input_ids_p, input_mask=input_mask_p, segment_ids=None,
-        labels=None, num_labels=num_labels, use_one_hot_embeddings=False, dropout_rate=1.0)
+        labels=None, num_labels=num_labels, use_one_hot_embeddings=False, dropout_rate=1.0, lstm_size=args.lstm_size)
 
     saver = tf.train.Saver()
     saver.restore(sess, tf.train.latest_checkpoint(model_dir))
@@ -72,6 +76,13 @@ def predict_batch(input_txts):
 
     :param line: a list. element is: [dummy_label,text_a,text_b]
     :return:
+        sen_predict: 字典列表，每一条句子的预测结果被存储成一个dict
+            key列表：
+            sentence: 原始句子
+            pred_tokens: 模型对该句子每一个token的label的预测
+            pred_bilstm_score: BiLSTM层输出的得分情况，n_token*n_label
+            crf_score: CRF层输出的路径得分
+        trans_result_df: 模型得出的转移矩阵, n_label*n_label
     """
     def convert(line):
         feature = convert_single_example(line, label_list, args.max_seq_length, tokenizer)
@@ -99,25 +110,63 @@ def predict_batch(input_txts):
         input_inputmask = np.reshape(input_inputmask,(-1, batch_size, args.max_seq_length))
         
         pred_labels = []
+        best_scores = []
+        logitss = []
         for i in range(input_inputids.shape[0]):
             feed_dict = {input_ids_p: input_inputids[i],
                          input_mask_p: input_inputmask[i]}
             # run session get current feed_dict result
-            pred_ids_result = sess.run([pred_ids], feed_dict)
-
+            pred_ids_result, best_score_result, logits_result, lstm_output_result = sess.run([pred_ids, best_score, logits, lstm_output], feed_dict)
 
             pred_label_result = convert_id_to_label(pred_ids_result, id2label)
             pred_labels.extend(pred_label_result)
-        
+            best_scores.extend(best_score_result)
+            logitss.extend(logits_result)
+
+        # 获取转移矩阵
+        trans_result = sess.run(trans)
+        labels_add = ['padding'] + list(list(id2label.values()))
+        trans_result_df = pd.DataFrame(trans_result, index=labels_add, columns=labels_add)
+        sen_predict = []
         with open("NER_result.txt", "w") as write_result:
             for i in range(len(input_sents)):
-                if len(input_sents[i]) != len(pred_labels[i]):
-                    raise ValueError("Length of sent is not the same as length of label")
-
-                for j in range(len(input_sents[i])):
-                    write_result.write(input_sents[i][j] + " " + pred_labels[i][j] + "\n")
+                write_result.write("input sentence no.%d:\n" % i)
+                write_result.write(str(input_sents[i]))
                 write_result.write("\n")
+                write_result.write("predicted tokens:\n")
+                write_result.write(str(pred_labels[i]))
+                write_result.write("\n")
+                write_result.write("predicted BiLSTM score for each token:\n")
+                bilstm_score = logitss[i][:len(pred_labels[i]), :]
+                bilstm_score_df = pd.DataFrame(bilstm_score, columns=labels_add)
+                write_result.write(str(bilstm_score_df.to_string()))
+                write_result.write("\n")
+                write_result.write("predicted CRF score:\n")
+                write_result.write(str(best_scores[i]))
+                write_result.write("\n\n")
+                sen_info = {}
+                sen_info['sentence'] = input_sents[i]
+                sen_info['pred_tokens'] = pred_labels[i]
+                sen_info['pred_bilstm_score'] = bilstm_score_df
+                sen_info['crf_score'] = best_scores[i]
+                sen_predict.append(sen_info)
+            write_result.write("\n")
+            write_result.write("Transition Matrix:\n")
+            write_result.write(trans_result_df.to_string())
+            write_result.write("\n\n")
+            write_result.write("id2label:\n")
+            write_result.write(str(id2label))
 
+        # with open("NER_result.txt", "w") as write_result:
+        #     for i in range(len(input_sents)):
+        #         if len(input_sents[i]) != len(pred_labels[i]):
+        #             raise ValueError("Length of sent is not the same as length of label")
+        #
+        #         for j in range(len(input_sents[i])):
+        #             write_result.write(input_sents[i][j] + " " + pred_labels[i][j] + "\n")
+        #         write_result.write("\n")
+
+        return sen_predict, trans_result_df
 
 def convert_id_to_label(pred_ids_result, idx2label):
     """
@@ -129,7 +178,7 @@ def convert_id_to_label(pred_ids_result, idx2label):
     result = []
     for row in range(batch_size):
         curr_seq = []
-        for ids in pred_ids_result[0][row]:
+        for ids in pred_ids_result[row]:
             if ids == 0:
                 break
             curr_label = idx2label[ids]
@@ -325,10 +374,9 @@ class Result(object):
 
 if __name__ == "__main__":
     input_txts = []
-    with open("input.txt", "r") as read_txt:
+    with open("input.txt", "r", encoding='UTF-8') as read_txt:
         for line in read_txt:
             if line.strip() == "":
                 continue
             input_txts.append(line.strip())
-
-    predict_batch(input_txts)
+    sen_info, trans = predict_batch(input_txts)

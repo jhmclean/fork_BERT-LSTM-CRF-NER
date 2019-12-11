@@ -44,6 +44,7 @@ class BLSTM_CRF(object):
         """
         blstm-crf网络
         :return:
+        如果crf_only=True，则返回的logits和lstm_output相同
         """
         if self.is_training:
             # lstm input dropout rate i set 0.9 will get best score
@@ -51,6 +52,7 @@ class BLSTM_CRF(object):
 
         if crf_only:
             logits = self.project_crf_layer(self.embedded_chars)
+            lstm_output = logits
         else:
             # blstm
             lstm_output = self.blstm_layer(self.embedded_chars)
@@ -59,8 +61,8 @@ class BLSTM_CRF(object):
         # crf
         loss, trans = self.crf_layer(logits)
         # CRF decode, pred_ids 是一条最大概率的标注路径
-        pred_ids, _ = crf.crf_decode(potentials=logits, transition_params=trans, sequence_length=self.lengths)
-        return (loss, logits, trans, pred_ids)
+        pred_ids, best_score = crf.crf_decode(potentials=logits, transition_params=trans, sequence_length=self.lengths)
+        return (loss, logits, trans, pred_ids, best_score, lstm_output)
 
     def _witch_cell(self):
         """
