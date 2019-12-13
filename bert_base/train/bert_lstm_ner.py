@@ -24,18 +24,21 @@ from bert_base.bert import modeling
 from bert_base.bert import optimization
 from bert_base.bert import tokenization
 
-# import
+import jieba
+import jieba.posseg
+import jieba.analyse
 
 from bert_base.train.models import create_model, InputFeatures, InputExample
 from bert_base.server.helper import set_logger
+
 __version__ = '0.1.0'
 
 __all__ = ['__version__', 'DataProcessor', 'NerProcessor', 'write_tokens', 'convert_single_example',
            'filed_based_convert_examples_to_features', 'file_based_input_fn_builder',
            'model_fn_builder', 'train']
 
-
 logger = set_logger('NER Training')
+
 
 class DataProcessor(object):
     """Base class for data converters for sequence classification data sets."""
@@ -109,7 +112,7 @@ class NerProcessor(DataProcessor):
                 else:
                     # 否则通过传入的参数，按照逗号分割
                     self.labels = labels.split(',')
-                self.labels = set(self.labels) # to set
+                self.labels = set(self.labels)  # to set
             except Exception as e:
                 print(e)
         # 通过读取train文件获取标签的方法会出现一定的风险。
@@ -122,7 +125,8 @@ class NerProcessor(DataProcessor):
                 with codecs.open(os.path.join(self.output_dir, 'label_list.pkl'), 'wb') as rf:
                     pickle.dump(self.labels, rf)
             else:
-                self.labels = ["O", 'B-TIM', 'I-TIM', "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC", "X", "[CLS]", "[SEP]"]
+                self.labels = ["O", 'B-TIM', 'I-TIM', "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC", "X",
+                               "[CLS]", "[SEP]"]
         return self.labels
 
     def _create_example(self, lines, set_type):
@@ -181,6 +185,26 @@ def write_tokens(tokens, output_dir, mode):
             if token != "**NULL**":
                 wf.write(token + '\n')
         wf.close()
+
+
+def get_pos_map():
+    """
+    词性列表参考1 https://www.cnblogs.com/adienhsuan/p/5674033.html
+    词性列表参考2 https://gist.github.com/guodong000/54c74ed55575fa2305b6afd0cf46ba7c
+    Author:
+        ZHANGJUNHAO304
+    Returns:
+
+    """
+    pos_list = [line.strip() for line in open("jieba_postags_complete.txt", "r")]
+    # pos_list = ['Ag', 'a', 'ad', 'an', 'b', 'c', 'dg', 'd', 'e', 'f', 'g', 'h',
+    #             'i', 'j', 'k', 'l', 'm', 'Ng', 'n', 'nr', 'ns', 'nt', 'o', 'p',
+    #             'q', 'r', 's', 'tg', 't', 'u', 'uj', 'vg', 'v', 'vd', 'vn', 'w', 'x',
+    #             'y', 'z', 'un']
+    pos_map = {}
+    for (i, pos) in enumerate(pos_list, 1):
+        pos_map[pos] = i
+    return pos_map
 
 
 def convert_single_example(ex_index, example, label_list, max_seq_length, tokenizer, output_dir, mode):
@@ -282,6 +306,50 @@ def convert_single_example(ex_index, example, label_list, max_seq_length, tokeni
     return feature
 
 
+def convert_single_example_pos(ex_index, example, pos_map, max_seq_length):
+    """
+    Author:
+        ZHANGJUNHAO304
+    Args:
+        feature:
+
+    Returns:
+
+    """
+    sentence_seged = jieba.posseg.cut(example.text.replace(" ", ""))
+    pos_seq = []
+    # 标注方式：暂时采用比较简单的方式，例如，分词‘海域’的词性为n，则相应的token标记为['n', 'n']
+    for x in sentence_seged:
+        pos_seq.extend([x.flag] * len(x.word))
+
+    # 序列截断
+    if len(pos_seq) >= max_seq_length - 1:
+        pos_seq = pos_seq[0:(max_seq_length - 2)]  # -2 的原因是因为序列需要加一个句首和句尾标志
+
+    # 以[CLS]开头。暂时将[CLS]的词性设置为'x'
+    pos_ids = [pos_map['x']]
+
+    for p in pos_seq:
+        try:
+            pos_ids.append(pos_map[p])
+        except:
+            # 未知词归为'un'=unknown
+            pos_ids.append(pos_map['un'])
+
+    # 以[SEP]结尾。暂时将[SEP]的词性设置为'x'
+    pos_ids.append(pos_map['x'])
+
+    # padding
+    padding_len = max_seq_length - len(pos_ids)
+    pos_ids.extend([0] * padding_len)
+    assert len(pos_ids) == max_seq_length
+
+    # 打印部分样本数据信息，以下是打印前5个
+    if ex_index < 5:
+        logger.info("pos_ids: %s" % " ".join([str(x) for x in pos_ids]))
+    return pos_ids
+
+
 def filed_based_convert_examples_to_features(
         examples, label_list, max_seq_length, tokenizer, output_file, output_dir, mode=None):
     """
@@ -295,6 +363,7 @@ def filed_based_convert_examples_to_features(
     :return:
     """
     writer = tf.python_io.TFRecordWriter(output_file)
+    pos_map = get_pos_map()
     # 遍历训练数据
     for (ex_index, example) in enumerate(examples):
         if ex_index % 5000 == 0:
@@ -311,6 +380,11 @@ def filed_based_convert_examples_to_features(
         features["input_mask"] = create_int_feature(feature.input_mask)
         features["segment_ids"] = create_int_feature(feature.segment_ids)
         features["label_ids"] = create_int_feature(feature.label_ids)
+
+        # ZHANGJUNHAO304 add
+        features["pos_ids"] = convert_single_example_pos(ex_index, example, pos_map, max_seq_length)
+        features["pos_ids"] = create_int_feature(features["pos_ids"])
+
         # features["label_mask"] = create_int_feature(feature.label_mask)
         # tf.train.Example/Feature 是一种协议，方便序列化？？？
         tf_example = tf.train.Example(features=tf.train.Features(feature=features))
@@ -325,6 +399,7 @@ def file_based_input_fn_builder(input_file, seq_length, is_training, drop_remain
         "label_ids": tf.FixedLenFeature([seq_length], tf.int64),
         # "label_ids":tf.VarLenFeature(tf.int64),
         # "label_mask": tf.FixedLenFeature([seq_length], tf.int64),
+        'pos_ids': tf.FixedLenFeature([seq_length], tf.int64)
     }
 
     def _decode_record(record, name_to_features):
@@ -375,6 +450,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         input_mask = features["input_mask"]
         segment_ids = features["segment_ids"]
         label_ids = features["label_ids"]
+        pos_ids = features["pos_ids"]
 
         print('shape of input_ids', input_ids.shape)
         # label_mask = features["label_mask"]
@@ -383,14 +459,14 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         # 使用参数构建模型,input_idx 就是输入的样本idx表示，label_ids 就是标签的idx表示
         total_loss, logits, trans, pred_ids, best_score, lstm_output = create_model(
             bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
-            num_labels, False, args.dropout_rate, args.lstm_size, args.cell, args.num_layers)
+            num_labels, False, pos_ids, args.dropout_rate, args.lstm_size, args.cell, args.num_layers)
 
         tvars = tf.trainable_variables()
         # 加载BERT模型
         if init_checkpoint:
             (assignment_map, initialized_variable_names) = \
-                 modeling.get_assignment_map_from_checkpoint(tvars,
-                                                             init_checkpoint)
+                modeling.get_assignment_map_from_checkpoint(tvars,
+                                                            init_checkpoint)
             tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
         # 打印变量名
@@ -406,9 +482,9 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
         output_spec = None
         if mode == tf.estimator.ModeKeys.TRAIN:
-            #train_op = optimizer.optimizer(total_loss, learning_rate, num_train_steps)
+            # train_op = optimizer.optimizer(total_loss, learning_rate, num_train_steps)
             train_op = optimization.create_optimizer(
-                 total_loss, learning_rate, num_train_steps, num_warmup_steps, False)
+                total_loss, learning_rate, num_train_steps, num_warmup_steps, False)
             hook_dict = {}
             hook_dict['loss'] = total_loss
             hook_dict['global_steps'] = tf.train.get_or_create_global_step()
@@ -519,7 +595,7 @@ def train(args):
                 print('pleace remove the files of output dir and data.conf')
                 exit(-1)
 
-    #check output dir exists
+    # check output dir exists
     if not os.path.exists(args.output_dir):
         os.mkdir(args.output_dir)
 
@@ -551,7 +627,7 @@ def train(args):
         train_examples = processor.get_train_examples(args.data_dir)
         # num_train_steps = int(
         #     len(train_examples) *1.0 / args.batch_size * args.num_train_epochs)
-        num_train_steps = 3 #jzhang: 试一试
+        num_train_steps = 3  # jzhang: 试一试
         if num_train_steps < 1:
             raise AttributeError('training data is so small...')
         num_warmup_steps = int(num_train_steps * args.warmup_proportion)
@@ -629,7 +705,7 @@ def train(args):
         train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn, max_steps=num_train_steps,
                                             hooks=[early_stopping_hook])
         # eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn)
-        eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn, steps=3) # jzhang: 试一试
+        eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn, steps=3)  # jzhang: 试一试
         tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
 
     if args.do_predict:
@@ -705,4 +781,3 @@ def train(args):
     # filter model
     if args.filter_adam_var:
         adam_filter(args.output_dir)
-

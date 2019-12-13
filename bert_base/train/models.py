@@ -10,7 +10,6 @@
 from bert_base.train.lstm_crf_layer import BLSTM_CRF
 from tensorflow.contrib.layers.python.layers import initializers
 
-
 __all__ = ['InputExample', 'InputFeatures', 'decode_labels', 'create_model', 'convert_id_str',
            'convert_id_to_label', 'result_to_json', 'create_classification_model']
 
@@ -62,9 +61,45 @@ class DataProcessor(object):
         raise NotImplementedError()
 
 
+def embedding_addpos(input_tensor,
+                     pos_ids,
+                     trainable=True,
+                     max_pos_num=300):
+    """
+    Author:
+        ZHANGJUNHAO304
+    Args:
+        input_tensor: BERT模型输出的embedding向量
+        pos_ids: 词性id
+        trainable: 词性向量是否能被训练
+        max_pos_num: 最大有多少种词性，要大于实际的词性类型总数
+    Returns:
+
+    """
+    from bert_base.bert.modeling import get_shape_list, layer_norm
+    import tensorflow as tf
+
+    input_shape = get_shape_list(input_tensor, expected_rank=3)
+    batch_size = input_shape[0]
+    seq_length = input_shape[1]
+    width = input_shape[2]
+    output = input_tensor
+    pos_embeddings_table = tf.get_variable(
+        name="pos_embeddings",
+        shape=[max_pos_num, width],
+        initializer=tf.random_normal_initializer(stddev=0.1),
+        trainable=trainable)
+    # 归一化暂时这样处理
+    pos_emds = layer_norm(tf.nn.embedding_lookup(pos_embeddings_table, pos_ids))
+    output += pos_emds
+    output = layer_norm(output)
+    return output
+
+
 def create_model(bert_config, is_training, input_ids, input_mask,
                  segment_ids, labels, num_labels, use_one_hot_embeddings,
-                 dropout_rate=1.0, lstm_size=1, cell='lstm', num_layers=1):
+                 pos_ids, dropout_rate=1.0, lstm_size=1, cell='lstm', num_layers=1,
+                 add_pos_embedding = True):
     """
     创建X模型
     :param bert_config: bert 配置
@@ -72,6 +107,7 @@ def create_model(bert_config, is_training, input_ids, input_mask,
     :param input_ids: 数据的idx 表示
     :param input_mask:
     :param segment_ids:
+    :param pos_ids: 词性的idx 表示
     :param labels: 标签的idx 表示
     :param num_labels: 类别数量
     :param use_one_hot_embeddings:
@@ -91,7 +127,8 @@ def create_model(bert_config, is_training, input_ids, input_mask,
     # 获取对应的embedding 输入数据[batch_size, seq_length, embedding_size]
     embedding = model.get_sequence_output()
     # jzhang add
-    # embedding = model.get_all_encoder_layers()
+    if add_pos_embedding:
+        embedding = embedding_addpos(embedding, pos_ids)
     max_seq_length = embedding.shape[1].value
     # 算序列真实长度
     used = tf.sign(tf.abs(input_ids))
