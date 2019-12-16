@@ -614,7 +614,8 @@ def train(args):
         model_dir=args.output_dir,
         save_summary_steps=2,
         save_checkpoints_steps=500,
-        session_config=session_config
+        session_config=session_config,
+        tf_random_seed=304
     )
 
     train_examples = None

@@ -17,7 +17,11 @@ from bert_base.bert import tokenization, modeling
 from bert_base.train.train_helper import get_args_parser
 args = get_args_parser()
 
-model_dir = './output_lstm_crf'
+import jieba
+import jieba.posseg
+import jieba.analyse
+
+model_dir = './output'
 bert_dir = './chinese_L-12_H-768_A-12'
 
 is_training=False
@@ -53,13 +57,14 @@ with graph.as_default():
     #sess.run(tf.global_variables_initializer())
     input_ids_p = tf.placeholder(tf.int32, [batch_size, args.max_seq_length], name="input_ids")
     input_mask_p = tf.placeholder(tf.int32, [batch_size, args.max_seq_length], name="input_mask")
+    pos_ids_p = tf.placeholder(tf.int32, [batch_size, args.max_seq_length], name="pos_ids")
 
     bert_config = modeling.BertConfig.from_json_file(os.path.join(bert_dir, 'bert_config.json'))
 
     # jzhang: 注意，如果加载的模型用到了lstm，则一定要设置lstm_size与加载模型的lstm_size相等，不然会报错
     (total_loss, logits, trans, pred_ids, best_score, lstm_output) = create_model(
         bert_config=bert_config, is_training=False, input_ids=input_ids_p, input_mask=input_mask_p, segment_ids=None,
-        labels=None, num_labels=num_labels, use_one_hot_embeddings=False, dropout_rate=1.0, lstm_size=args.lstm_size)
+        labels=None, num_labels=num_labels, use_one_hot_embeddings=False, pos_ids=pos_ids_p, dropout_rate=1.0, lstm_size=args.lstm_size)
 
     saver = tf.train.Saver()
     saver.restore(sess, tf.train.latest_checkpoint(model_dir))
@@ -89,7 +94,8 @@ def predict_batch(input_txts):
         input_ids = np.reshape([feature.input_ids],(batch_size, args.max_seq_length))
         input_mask = np.reshape([feature.input_mask],(batch_size, args.max_seq_length))
         segment_ids = np.reshape([feature.segment_ids],(batch_size, args.max_seq_length))
-        label_ids =np.reshape([feature.label_ids],(batch_size, args.max_seq_length))
+        label_ids = np.reshape([feature.label_ids],(batch_size, args.max_seq_length))
+
         return input_ids, input_mask, segment_ids, label_ids
 
     global graph
@@ -101,20 +107,26 @@ def predict_batch(input_txts):
         input_inputids = [feature.input_ids for feature in input_features]
         input_inputmask = [feature.input_mask for feature in input_features]
 
+        pos_map = get_pos_map()
+        input_posids = [convert_single_example_pos(sent, pos_map, args.max_seq_length) for sent in input_sents]
+
         if (len(input_txts) % batch_size) != 0:
             pad_num = batch_size - (len(input_txts) % batch_size)
             input_inputids.extend([[0 for _ in range(args.max_seq_length)] for _ in range(pad_num)])
             input_inputmask.extend([[0 for _ in range(args.max_seq_length)] for _ in range(pad_num)])
+            input_posids.extend([[0 for _ in range(args.max_seq_length)] for _ in range(pad_num)])
 
         input_inputids = np.reshape(input_inputids,(-1, batch_size, args.max_seq_length))
         input_inputmask = np.reshape(input_inputmask,(-1, batch_size, args.max_seq_length))
+        input_posids = np.reshape(input_posids,(-1, batch_size, args.max_seq_length))
         
         pred_labels = []
         best_scores = []
         logitss = []
         for i in range(input_inputids.shape[0]):
             feed_dict = {input_ids_p: input_inputids[i],
-                         input_mask_p: input_inputmask[i]}
+                         input_mask_p: input_inputmask[i],
+                         pos_ids_p: input_posids[i]}
             # run session get current feed_dict result
             pred_ids_result, best_score_result, logits_result, lstm_output_result = sess.run([pred_ids, best_score, logits, lstm_output], feed_dict)
 
@@ -255,6 +267,64 @@ def convert_single_example(example, label_list, max_seq_length, tokenizer):
         # label_mask = label_mask
     )
     return feature
+
+def convert_single_example_pos(example, pos_map, max_seq_length):
+    """
+    Author:
+        ZHANGJUNHAO304
+    Args:
+        feature:
+
+    Returns:
+
+    """
+    sentence_seged = jieba.posseg.cut("".join(example))
+    pos_seq = []
+    # 标注方式：暂时采用比较简单的方式，例如，分词‘海域’的词性为n，则相应的token标记为['n', 'n']
+    for x in sentence_seged:
+        pos_seq.extend([x.flag] * len(x.word))
+
+    # 序列截断
+    if len(pos_seq) >= max_seq_length - 1:
+        pos_seq = pos_seq[0:(max_seq_length - 2)]  # -2 的原因是因为序列需要加一个句首和句尾标志
+
+    # 以[CLS]开头。暂时将[CLS]的词性设置为'x'
+    pos_ids = [pos_map['x']]
+
+    for p in pos_seq:
+        try:
+            pos_ids.append(pos_map[p])
+        except:
+            # 未知词归为'un'=unknown
+            pos_ids.append(pos_map['un'])
+
+    # 以[SEP]结尾。暂时将[SEP]的词性设置为'x'
+    pos_ids.append(pos_map['x'])
+
+    # padding
+    padding_len = max_seq_length - len(pos_ids)
+    pos_ids.extend([0] * padding_len)
+    assert len(pos_ids) == max_seq_length
+    return pos_ids
+
+def get_pos_map():
+    """
+    词性列表参考1 https://www.cnblogs.com/adienhsuan/p/5674033.html
+    词性列表参考2 https://gist.github.com/guodong000/54c74ed55575fa2305b6afd0cf46ba7c
+    Author:
+        ZHANGJUNHAO304
+    Returns:
+
+    """
+    pos_list = [line.strip() for line in open("jieba_postags_complete.txt", "r")]
+    # pos_list = ['Ag', 'a', 'ad', 'an', 'b', 'c', 'dg', 'd', 'e', 'f', 'g', 'h',
+    #             'i', 'j', 'k', 'l', 'm', 'Ng', 'n', 'nr', 'ns', 'nt', 'o', 'p',
+    #             'q', 'r', 's', 'tg', 't', 'u', 'uj', 'vg', 'v', 'vd', 'vn', 'w', 'x',
+    #             'y', 'z', 'un']
+    pos_map = {}
+    for (i, pos) in enumerate(pos_list, 1):
+        pos_map[pos] = i
+    return pos_map
 
 
 class Pair(object):
